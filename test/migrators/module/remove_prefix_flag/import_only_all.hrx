@@ -1,0 +1,26 @@
+<==> arguments
+--migrate-deps --remove-prefix=lib- --forward=all --import-only-all
+
+<==> input/entrypoint.scss
+@import "prefix";
+@import "no-prefix";
+
+<==> input/_prefix.scss
+$lib-variable: green;
+
+<==> input/_no-prefix.scss
+$unprefixed: blue;
+
+<==> output/entrypoint.scss
+@forward "prefix";
+@forward "no-prefix";
+
+<==> output/entrypoint.import.scss
+@forward "entrypoint" as lib-* hide $lib-unprefixed;
+@forward "entrypoint" show $unprefixed;
+
+<==> output/_prefix.scss
+$variable: green;
+
+<==> output/_prefix.import.scss
+@forward "prefix" as lib-*;

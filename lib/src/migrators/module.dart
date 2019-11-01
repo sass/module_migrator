@@ -43,6 +43,9 @@ class ModuleMigrator extends Migrator {
         abbr: 'p',
         help: 'Removes PREFIX from all migrated member names.',
         valueHelp: 'PREFIX')
+    ..addFlag('import-only-all',
+        help: 'Generates import-only stylesheets for all files with removed '
+            'prefixes, not just the entrypoint.')
     ..addOption('forward',
         allowed: ['all', 'none', 'prefixed'],
         allowedHelp: {
@@ -96,7 +99,8 @@ class ModuleMigrator extends Migrator {
         migrateDependencies: migrateDependencies,
         prefixToRemove:
             (argResults['remove-prefix'] as String)?.replaceAll('_', '-'),
-        forward: forward);
+        forward: forward,
+        importOnlyAll: argResults['import-only-all'] as bool);
     var migrated = visitor.run(stylesheet, importer);
     _filesWithRenamedDeclarations.addAll(visitor.renamedMembers.keys
         .map((declaration) => declaration.sourceUrl));
@@ -185,6 +189,10 @@ class _ModuleMigrationVisitor extends MigrationVisitor {
   /// The value of the --forward flag.
   final ForwardType forward;
 
+  /// Whether to generate import-only stylesheets for all files with removed
+  /// prefixes.
+  final bool importOnlyAll;
+
   /// Constructs a new module migration visitor.
   ///
   /// [importCache] must be the same one used by [references].
@@ -198,7 +206,10 @@ class _ModuleMigrationVisitor extends MigrationVisitor {
   /// This converts the OS-specific relative [loadPaths] to absolute URL paths.
   _ModuleMigrationVisitor(
       this.importCache, this.references, List<String> loadPaths,
-      {bool migrateDependencies, this.prefixToRemove, this.forward})
+      {bool migrateDependencies,
+      this.prefixToRemove,
+      this.forward,
+      this.importOnlyAll})
       : loadPaths =
             loadPaths.map((path) => p.toUri(p.absolute(path)).path).toList(),
         super(importCache, migrateDependencies: migrateDependencies);
@@ -213,29 +224,41 @@ class _ModuleMigrationVisitor extends MigrationVisitor {
     // If a prefix was removed from any members, add an import-only stylesheet
     // that forwards the entrypoint with that prefix.
     if (prefixToRemove != null && renamedMembers.isNotEmpty) {
+      if (importOnlyAll) {
+        for (var url in migrated.keys.toList()) {
+          if (url == stylesheet.span.sourceUrl) continue;
+          var results = _generateImportOnly(url);
+          if (results != null) migrated[results.item1] = results.item2;
+        }
+      }
       var url = stylesheet.span.sourceUrl;
-      var importOnlyUrl = getImportOnlyUrl(url);
-      var tuple = _absoluteUrlToDependency(url, relativeTo: importOnlyUrl);
-      var results = _generateImportOnly(url, tuple.item1);
-      if (results != null) migrated[importOnlyUrl] = results;
+      var results = _generateImportOnly(url, isEntrypoint: true);
+      if (results != null) migrated[results.item1] = results.item2;
     }
     return migrated;
   }
 
-  /// Generates an import-only stylesheet for [entrypoint] that forwards any
-  /// members that used to have a prefix with that prefix, but forwards other
-  /// members as-is.
+  /// Generates an import-only stylesheet for [url] that forwards any members
+  /// that used to have a prefix with that prefix, but forwards other members
+  /// as-is.
+  ///
+  /// If [url] is an entrypoint, [isEntrypoint] should be true to ensure that
+  /// any members that are forwarded through the entrypoint are also included.
   ///
   /// If there are no previously-prefixed members to forward, this returns null.
-  String _generateImportOnly(Uri entrypoint, String dependency) {
-    var semicolon = entrypoint.path.endsWith('.sass') ? '' : ';';
+  /// Otherwise, this returns a tuple of the import-only stylesheet's URL and
+  /// its contents.
+  Tuple2<Uri, String> _generateImportOnly(Uri url,
+      {bool isEntrypoint = false}) {
+    var semicolon = url.path.endsWith('.sass') ? '' : ';';
     var forwardWithPrefix = <MemberDeclaration>{};
     var forwardWithoutPrefix = <MemberDeclaration>{};
     for (var declaration in references.globalDeclarations) {
-      var visibleAtEntrypoint = declaration.sourceUrl == entrypoint ||
-          (_shouldForward(declaration.name) &&
+      var visible = declaration.sourceUrl == url ||
+          (isEntrypoint &&
+              _shouldForward(declaration.name) &&
               !declaration.name.startsWith('-'));
-      if (!visibleAtEntrypoint) continue;
+      if (!visible) continue;
 
       if (declaration.name.startsWith(prefixToRemove)) {
         forwardWithPrefix.add(declaration);
@@ -244,8 +267,13 @@ class _ModuleMigrationVisitor extends MigrationVisitor {
       }
     }
     if (forwardWithPrefix.isEmpty) return null;
+
+    var importOnlyUrl = getImportOnlyUrl(url);
+    var dependency =
+        _absoluteUrlToDependency(url, relativeTo: importOnlyUrl)?.item1;
     if (forwardWithoutPrefix.isEmpty) {
-      return '@forward "$dependency" as $prefixToRemove*$semicolon\n';
+      return Tuple2(importOnlyUrl,
+          '@forward "$dependency" as $prefixToRemove*$semicolon\n');
     }
     var hidden = forwardWithoutPrefix.map((declaration) {
       var name = '$prefixToRemove${declaration.name}';
@@ -256,8 +284,10 @@ class _ModuleMigrationVisitor extends MigrationVisitor {
             ? '\$${declaration.name}'
             : declaration.name)
         .join(', ');
-    return '@forward "$dependency" as $prefixToRemove* hide $hidden$semicolon\n'
-        '@forward "$dependency" show $shown$semicolon\n';
+    return Tuple2(
+        importOnlyUrl,
+        '@forward "$dependency" as $prefixToRemove* hide $hidden$semicolon\n'
+        '@forward "$dependency" show $shown$semicolon\n');
   }
 
   /// If [declaration] should be renamed, adds it to [renamedMembers].

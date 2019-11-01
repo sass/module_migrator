@@ -2,6 +2,11 @@
 
 * Add support for glob inputs on the command line.
 
+### Module Migrator
+
+* Add new `--import-only-for-all` flag that generates import-only stylesheets
+  for all files with removed prefixes, instead of just entrypoints.
+
 ## 1.0.1
 
 ### Module Migrator
